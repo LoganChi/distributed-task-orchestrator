@@ -1,10 +1,23 @@
 # Workflow: Detailed Distributed Task Orchestration Workflow
 
-## Complete Execution Flow
+## Complete Execution Flow Diagram
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                    User Submits Complex Request                  │
+└─────────────────────────────────┬───────────────────────────────┘
+                                  ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ Phase 0: Task Initialization (with Isolation)                    │
+│ ┌───────────────────────────────────────────────────────────┐   │
+│ │ 0.1 Generate unique task ID (timestamp + optional slug)   │   │
+│ │ 0.2 Create isolated task directory                        │   │
+│ │ 0.3 Initialize task metadata (meta.json)                  │   │
+│ │ 0.4 Update active tasks registry                          │   │
+│ │ 0.5 Create/update latest symlink                          │   │
+│ └───────────────────────────────────────────────────────────┘   │
+│ 📄 Output: .orchestrator/tasks/task-TIMESTAMP[-SLUG]/            │
+│          .orchestrator/latest -> tasks/task-TIMESTAMP[-SLUG]     │
 └─────────────────────────────────┬───────────────────────────────┘
                                   ▼
 ┌─────────────────────────────────────────────────────────────────┐
@@ -15,7 +28,7 @@
 │ │ 1.3 Break down into atomic tasks                           │   │
 │ │ 1.4 Define Input/Output for each task                      │   │
 │ └───────────────────────────────────────────────────────────┘   │
-│ Output: .orchestrator/master_plan.md                             │
+│ 📄 Output: .orchestrator/latest/master_plan.md                   │
 └─────────────────────────────────┬───────────────────────────────┘
                                   ▼
 ┌─────────────────────────────────────────────────────────────────┐
@@ -26,7 +39,7 @@
 │ │ 2.3 Generate Agent task files                              │   │
 │ │ 2.4 Initialize status as "Pending"                         │   │
 │ └───────────────────────────────────────────────────────────┘   │
-│ Output: .orchestrator/agent_tasks/agent-XX.md                    │
+│ 📄 Output: .orchestrator/latest/agent_tasks/agent-XX.md          │
 └─────────────────────────────────┬───────────────────────────────┘
                                   ▼
 ┌─────────────────────────────────────────────────────────────────┐
@@ -38,7 +51,7 @@
 │ │ 3.4 Execute subsequent tasks after dependencies complete   │   │
 │ │ 3.5 Record execution logs                                  │   │
 │ └───────────────────────────────────────────────────────────┘   │
-│ Output: .orchestrator/results/agent-XX-result.md                 │
+│ 📄 Output: .orchestrator/latest/results/agent-XX-result.md       │
 └─────────────────────────────────┬───────────────────────────────┘
                                   ▼
 ┌─────────────────────────────────────────────────────────────────┐
@@ -49,11 +62,125 @@
 │ │ 4.3 Merge results according to dependency order            │   │
 │ │ 4.4 Generate final output                                  │   │
 │ └───────────────────────────────────────────────────────────┘   │
-│ Output: .orchestrator/final_output.md                            │
+│ 📄 Output: .orchestrator/latest/final_output.md                  │
+└─────────────────────────────────┬───────────────────────────────┘
+                                  ▼
+┌─────────────────────────────────────────────────────────────────┐
+│ Phase 5: Task Cleanup (Optional)                                 │
+│ ┌───────────────────────────────────────────────────────────┐   │
+│ │ 5.1 Archive or delete completed task                       │   │
+│ │ 5.2 Update active tasks registry                          │   │
+│ │ 5.3 Remove from latest symlink                            │   │
+│ └───────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-## Phase 1: Task Analysis and Decomposition
+---
+
+## Phase 0: Task Initialization (with Isolation)
+
+### 0.1 Generate Task ID
+
+```powershell
+# Generate unique task ID
+function New-TaskId {
+    param([string]$Slug = "")
+
+    $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    $taskId = "task-$timestamp"
+
+    if ($Slug) {
+        $cleanSlug = $Slug -replace '[^a-zA-Z0-9-]', ''
+        $taskId = "$taskId-$cleanSlug"
+    }
+
+    return $taskId
+}
+
+# Examples
+New-TaskId                              # → task-20250114-143022
+New-TaskId -Slug "code-review"          # → task-20250114-143022-code-review
+New-TaskId -Slug "security-audit-v2"    # → task-20250114-143022-security-audit-v2
+```
+
+### 0.2 Directory Structure Creation
+
+```powershell
+# Create isolated task directory
+$taskId = New-TaskId -Slug "code-review"
+$taskDir = ".orchestrator/tasks/$taskId"
+
+# Directory structure
+$directories = @(
+    $taskDir,
+    "$taskDir/agent_tasks",
+    "$taskDir/results"
+)
+
+foreach ($dir in $directories) {
+    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+}
+
+# Result:
+# .orchestrator/tasks/task-20250114-143022-code-review/
+# ├── agent_tasks/
+# └── results/
+```
+
+### 0.3 Task Metadata Creation
+
+```powershell
+# Create meta.json
+$meta = @{
+    taskId = $taskId
+    slug = "code-review"
+    description = "Review TypeScript code for quality and security"
+    createdAt = (Get-Date -Format "o")  # ISO 8601 format
+    status = "initialized"
+    workingDirectory = $taskDir
+} | ConvertTo-Json -Depth 10
+
+$meta | Out-File "$taskDir/meta.json" -Encoding UTF8
+```
+
+### 0.4 Update Active Tasks Registry
+
+```powershell
+# Update .orchestrator/active_tasks.json
+$activeTasksFile = ".orchestrator/active_tasks.json"
+$activeTasks = if (Test-Path $activeTasksFile) {
+    Get-Content $activeTasksFile | ConvertFrom-Json
+} else {
+    @()
+}
+
+$activeTasks += @{
+    taskId = $taskId
+    slug = "code-review"
+    description = "Review TypeScript code for quality and security"
+    createdAt = (Get-Date -Format "o")
+    taskDir = $taskDir
+}
+
+$activeTasks | ConvertTo-Json -Depth 10 | Out-File $activeTasksFile -Encoding UTF8
+```
+
+### 0.5 Create/Update Latest Symlink
+
+```powershell
+# Update .orchestrator/latest to point to new task
+$latestLink = ".orchestrator/latest"
+if (Test-Path $latestLink) {
+    Remove-Item $latestLink -Recurse -Force
+}
+Copy-Item -Path $taskDir -Destination $latestLink -Recurse -Force
+
+# Now .orchestrator/latest -> .orchestrator/tasks/task-20250114-143022-code-review/
+```
+
+---
+
+## Phase 1: Task Analysis and Decomposition (Detailed)
 
 ### 1.1 Parse User Intent
 
@@ -72,7 +199,7 @@
 
 ### Implicit Requirements
 - [ ] What does the user expect but didn't explicitly state?
-- [ ] Industry best practices to follow?
+- [ ] Industry best practices?
 ```
 
 ### 1.2 Dependency Analysis
@@ -83,8 +210,8 @@
 |------|-------------|---------|
 | Data Dependency | B needs A's output as input | Analyze code → Generate report |
 | Sequential Dependency | B must execute after A | Create file → Write content |
-| Resource Dependency | A and B compete for same resource | Write to same file |
-| No Dependency | Completely independent | Process different files |
+| Resource Dependency | A and B compete for same resource | Write to same file simultaneously |
+| No Dependency | Completely independent | Process different files separately |
 
 **Building Dependency Graph:**
 
@@ -94,15 +221,15 @@ Example: Code Review Task
           ┌─→ [T-02: Check code style] ─┐
 [T-01] ──┤                              ├──→ [T-05: Generate report]
 Read code ├─→ [T-03: Security scan] ────┤
-          └─→ [T-04: Performance check] ─┘
+          └─→ [T-04: Performance analysis] ─┘
 ```
 
 ### 1.3 Atomic Task Definition
 
 **Atomic Task Criteria:**
 - ✅ Single Responsibility: Does only one thing
-- ✅ Independently Executable: No runtime context dependency
-- ✅ Verifiable Output: Clear success/failure criteria
+- ✅ Independently Executable: Doesn't depend on runtime context
+- ✅ Verifiable Output: Has clear success/failure criteria
 - ✅ Retriable: Can be safely retried after failure
 
 ```markdown
@@ -121,7 +248,7 @@ Read code ├─→ [T-03: Security scan] ────┤
 - [x] Safe to retry
 ```
 
-## Phase 2: Agent Assignment
+## Phase 2: Agent Assignment (Detailed)
 
 ### 2.1 Agent ID Assignment Rules
 
@@ -130,16 +257,16 @@ Agent-{sequence}
 Sequence: 01, 02, 03, ... (two-digit zero-padded)
 ```
 
-### 2.2 Complete Task Status Table
+### 2.2 Complete Task Status Table Fields
 
 ```markdown
-| Task ID | Description | Agent | Status | Priority | Deps | Start | End | Retries |
-|---------|-------------|-------|--------|----------|------|-------|-----|---------|
+| Task ID | Task Description | Agent | Status | Priority | Deps | Start | End | Retries |
+|---------|------------------|-------|--------|----------|------|-------|-----|---------|
 | T-01 | Read code | Agent-01 | ✅ | P0 | None | 10:00 | 10:01 | 0 |
 | T-02 | Style check | Agent-02 | 🔵 | P1 | T-01 | 10:01 | - | 0 |
 | T-03 | Security scan | Agent-03 | 🔵 | P1 | T-01 | 10:01 | - | 0 |
-| T-04 | Perf analysis | Agent-04 | 🟡 | P1 | T-01 | - | - | 0 |
-| T-05 | Gen report | Agent-05 | ⏸️ | P2 | T-02,T-03,T-04 | - | - | 0 |
+| T-04 | Performance analysis | Agent-04 | 🟡 | P1 | T-01 | - | - | 0 |
+| T-05 | Generate report | Agent-05 | ⏸️ | P2 | T-02,T-03,T-04 | - | - | 0 |
 ```
 
 ### 2.3 Priority Definitions
@@ -151,7 +278,7 @@ Sequence: 01, 02, 03, ... (two-digit zero-padded)
 | P2 | Normal | Standard priority |
 | P3 | Low Priority | Can be delayed |
 
-## Phase 3: Parallel Execution
+## Phase 3: Parallel Execution (Detailed)
 
 ### 3.1 Execution Scheduling Algorithm
 
@@ -220,7 +347,7 @@ def schedule_tasks(tasks, dependencies):
 
 ### 3.3 CLI Execution Mode
 
-**Windows PowerShell:**
+**Windows PowerShell Parallel Execution:**
 
 ```powershell
 # Method 1: Using Jobs
@@ -235,7 +362,7 @@ $jobs = foreach ($file in $taskFiles) {
     } -ArgumentList $file.FullName, ".orchestrator/results/$agentId-result.md"
 }
 
-# Wait for completion
+# Wait for all to complete
 $jobs | Wait-Job
 
 # Collect results
@@ -285,7 +412,7 @@ $pool.Close()
 $pool.Dispose()
 ```
 
-## Phase 4: Result Aggregation
+## Phase 4: Result Aggregation (Detailed)
 
 ### 4.1 Result Collection Check
 
@@ -333,12 +460,12 @@ $pool.Dispose()
 [Merge Agent-03 detailed content]
 ```
 
-**Strategy C: AI-Powered Merge**
+**Strategy C: Intelligent Merge (Requires AI Processing)**
 ```powershell
 # Use Claude to merge multiple results
 $results = Get-Content ".orchestrator/results/*.md" -Raw
 $mergePrompt = @"
-Merge the following subtask results into a complete report:
+Please merge the following multiple subtask results into a complete report:
 
 $results
 
