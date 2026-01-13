@@ -1,23 +1,23 @@
 # Examples: Distributed Task Orchestration Practical Examples
 
-## Example 1: Codebase Analysis
+## Example 1: Codebase Analysis Task
 
 ### User Request
-> "Analyze my TypeScript project for code quality, security vulnerabilities, and performance issues"
+> "Analyze my TypeScript project, check code quality, security vulnerabilities, and performance issues, and generate a complete report"
 
 ---
 
-### Phase 1: Task Decomposition
+### Phase 1️⃣ Task Analysis and Decomposition
 
 ```markdown
 # .orchestrator/master_plan.md
 
 ## Original Request
-> Analyze TypeScript project for code quality, security, and performance
+> Analyze TypeScript project for code quality, security vulnerabilities, and performance issues
 
 ## Goal Definition
-**Primary Goal**: Generate comprehensive code analysis report
-**Success Criteria**: Cover quality, security, and performance dimensions
+**Primary Goal**: Generate a comprehensive code analysis report
+**Success Criteria**: Cover code quality, security, and performance dimensions
 
 ## Task Decomposition
 
@@ -34,20 +34,20 @@
 | Task ID | Task Name | Description | Dependencies | Priority |
 |---------|-----------|-------------|--------------|----------|
 | T-01 | Code Scan | Read all .ts/.tsx files | None | P0 |
-| T-02 | Quality Analysis | Check types, code style | T-01 | P1 |
-| T-03 | Security Scan | Find vulnerabilities | T-01 | P1 |
-| T-04 | Performance Analysis | Detect perf patterns | T-01 | P1 |
-| T-05 | Generate Report | Integrate all results | T-02,T-03,T-04 | P2 |
+| T-02 | Quality Analysis | Check type usage, code style | T-01 | P1 |
+| T-03 | Security Scan | Check vulnerabilities and sensitive info | T-01 | P1 |
+| T-04 | Performance Analysis | Analyze performance issue patterns | T-01 | P1 |
+| T-05 | Generate Report | Integrate all analysis results | T-02,T-03,T-04 | P2 |
 ```
 
 ---
 
-### Phase 2: Agent Assignment
+### Phase 2️⃣ Agent Assignment
 
 ```markdown
 ## Task Status Table
-| Task ID | Agent | Status | Start | End |
-|---------|-------|--------|-------|-----|
+| Task ID | Agent | Status | Start Time | End Time |
+|---------|-------|--------|------------|----------|
 | T-01 | Agent-01 | 🟡 Pending | - | - |
 | T-02 | Agent-02 | ⏸️ Waiting | - | - |
 | T-03 | Agent-03 | ⏸️ Waiting | - | - |
@@ -60,11 +60,11 @@
 # Agent-01 Task: Code Scan
 
 ## Task Description
-Scan src/ directory, read all TypeScript files (.ts, .tsx)
+Scan the project's src/ directory, read all TypeScript files (.ts, .tsx)
 
 ## Expected Output
 1. File list (path, line count, size)
-2. Project stats (total files, total lines)
+2. Project statistics (total files, total lines)
 3. Main entry file identification
 
 ## Output Format
@@ -78,7 +78,7 @@ Scan src/ directory, read all TypeScript files (.ts, .tsx)
 
 ---
 
-### Phase 3: Simulated Execution
+### Phase 3️⃣ Simulated Parallel Execution
 
 ```
 ══════════════════════════════════════════════════════════════════
@@ -88,11 +88,11 @@ Scan src/ directory, read all TypeScript files (.ts, .tsx)
 ┌──────────────────────────────────────────────────────────────────
 │ 🤖 Agent-01 [T-01: Code Scan]
 ├──────────────────────────────────────────────────────────────────
-│ 📥 Instruction: Scan all TypeScript files in src/
+│ 📥 Instruction: Scan all TypeScript files in src/ directory
 │ ⚙️ Execution:
-│    → Traverse directory structure
+│    → Traverse src/ directory structure
 │    → Identify .ts and .tsx files
-│    → Read and calculate statistics
+│    → Read file contents and calculate statistics
 │ 📤 Output: 
 │    {
 │      "files": [
@@ -103,7 +103,7 @@ Scan src/ directory, read all TypeScript files (.ts, .tsx)
 │      "stats": {"totalFiles": 15, "totalLines": 2847}
 │    }
 │ ⏱️ Duration: 1.8s
-│ ✅ Completed
+│ ✅ Status: Completed
 └──────────────────────────────────────────────────────────────────
 
 ══════════════════════════════════════════════════════════════════
@@ -111,17 +111,43 @@ Scan src/ directory, read all TypeScript files (.ts, .tsx)
 ══════════════════════════════════════════════════════════════════
 
 ┌──────────────────────────────────────────────────────────────────
-│ 🤖 Agent-02 [T-02: Quality]  |  Agent-03 [T-03: Security]  |  Agent-04 [T-04: Perf]
+│ 🤖 Agent-02 [T-02: Quality Analysis]     🔄 Parallel Execution
 ├──────────────────────────────────────────────────────────────────
-│ [Executing in parallel...]
-│ 
-│ Agent-02: Checking any type usage, unused vars, complexity
-│ Agent-03: Scanning for hardcoded keys, injection risks
-│ Agent-04: Finding missing useMemo, useCallback, large deps
-│ 
-│ Agent-04 completed ✅ (2.5s)
-│ Agent-03 completed ✅ (2.8s)
-│ Agent-02 completed ✅ (3.2s)
+│ 📥 Instruction: Analyze code quality and type usage
+│ ⚙️ Execution:
+│    → Check any type usage
+│    → Check unused variables
+│    → Check code complexity
+│ 📤 Output:
+│    - any type usage: 8 occurrences
+│    - Unused variables: 3 occurrences
+│    - High complexity functions: 2
+│ ✅ Completed (3.2s)
+├──────────────────────────────────────────────────────────────────
+│ 🤖 Agent-03 [T-03: Security Scan]     🔄 Parallel Execution
+├──────────────────────────────────────────────────────────────────
+│ 📥 Instruction: Scan for security vulnerabilities
+│ ⚙️ Execution:
+│    → Check hardcoded keys
+│    → Check SQL injection risks
+│    → Check XSS risks
+│ 📤 Output:
+│    - Warning: Found 1 potential API key
+│    - Suggestion: 2 places need input validation
+│ ✅ Completed (2.8s)
+├──────────────────────────────────────────────────────────────────
+│ 🤖 Agent-04 [T-04: Performance Analysis]     🔄 Parallel Execution
+├──────────────────────────────────────────────────────────────────
+│ 📥 Instruction: Analyze performance issues
+│ ⚙️ Execution:
+│    → Check unnecessary re-renders
+│    → Check large dependencies
+│    → Check memory leak patterns
+│ 📤 Output:
+│    - Missing useMemo: 5 places
+│    - Missing useCallback: 3 places
+│    - Suggest code splitting: 1 place
+│ ✅ Completed (2.5s)
 └──────────────────────────────────────────────────────────────────
 
 ══════════════════════════════════════════════════════════════════
@@ -131,7 +157,7 @@ Scan src/ directory, read all TypeScript files (.ts, .tsx)
 ┌──────────────────────────────────────────────────────────────────
 │ 🤖 Agent-05 [T-05: Generate Report]
 ├──────────────────────────────────────────────────────────────────
-│ 📥 Instruction: Integrate all analysis results
+│ 📥 Instruction: Integrate all analysis results to generate report
 │ ⚙️ Execution:
 │    → Read Agent-02,03,04 results
 │    → Sort issues by priority
@@ -143,7 +169,7 @@ Scan src/ directory, read all TypeScript files (.ts, .tsx)
 
 ---
 
-### Phase 4: Result
+### Phase 4️⃣ Result Aggregation
 
 ```markdown
 # .orchestrator/final_output.md
@@ -154,38 +180,42 @@ Scan src/ directory, read all TypeScript files (.ts, .tsx)
 | Metric | Value |
 |--------|-------|
 | Files analyzed | 15 |
-| Total lines | 2,847 |
+| Total lines of code | 2,847 |
 | Issues found | 23 |
-| Duration | 11.8s |
+| Execution time | 11.8 seconds |
 
-### 🔴 Critical (Immediate Action)
+### 🔴 Critical Issues (Immediate Action Required)
 
-#### 1. Security Issue
+#### 1. Security Issues
 - **API Key Exposure** (src/api/config.ts:12)
   ```typescript
   const API_KEY = "sk-abc123...";  // ❌ Hardcoded
   ```
-  **Fix**: Use `process.env.API_KEY`
+  **Recommendation**: Use environment variable `process.env.API_KEY`
 
-### 🟡 Warnings
+### 🟡 Warnings (Recommended to Address)
 
 #### 2. Code Quality
-- 8 `any` type usages
+- 8 occurrences of `any` type
 - 3 unused variables
-- 2 high complexity functions (CC > 10)
+- 2 high complexity functions (cyclomatic complexity > 10)
 
-#### 3. Performance
-- 5 missing `useMemo`
-- 3 missing `useCallback`
-- Suggest code splitting for `HeavyComponent`
+#### 3. Performance Optimization
+- 5 places missing `useMemo`
+- 3 places missing `useCallback`
+- Recommend code splitting for `HeavyComponent`
+
+### 📋 Detailed Findings List
+
+[Complete list of issues...]
 ```
 
 ---
 
-## Example 2: Multi-Document Translation
+## Example 2: Multi-Document Translation Task
 
 ### User Request
-> "Translate the 5 English documents in docs/ to Chinese"
+> "Translate the 5 English documents in docs/ directory to Chinese"
 
 ---
 
@@ -195,7 +225,7 @@ Scan src/ directory, read all TypeScript files (.ts, .tsx)
 ## Task Decomposition
 
 ### Dependencies
-None - all translations fully parallelizable
+No dependencies, all translation tasks can be fully parallelized
 
 ### Task List
 | Task ID | File | Agent | Status |
@@ -217,10 +247,11 @@ $jobs = foreach ($doc in $docs) {
     Start-Job -Name "Agent-0$index" -ScriptBlock {
         param($file)
         $content = Get-Content $file -Raw
-        claude -p "Translate to Chinese, maintain Markdown: $content"
+        claude -p "Translate the following English content to Chinese, maintain Markdown format: $content"
     } -ArgumentList $doc.FullName
 }
 
+# Wait for all to complete in parallel
 $jobs | Wait-Job | Receive-Job
 ```
 
@@ -228,7 +259,7 @@ $jobs | Wait-Job | Receive-Job
 
 ```
 ══════════════════════════════════════════════════════════════════
-              🚀 Parallel: 5 translations running
+              🚀 Parallel Execution: 5 translation tasks running simultaneously
 ══════════════════════════════════════════════════════════════════
 
 Agent-01 [intro.md]         ████████████████████░░░░ 80%
@@ -236,6 +267,8 @@ Agent-02 [getting-started]  █████████████████�
 Agent-03 [api-reference]    ████████████░░░░░░░░░░░░ 50%
 Agent-04 [tutorials.md]     ██████████████████░░░░░░ 75%
 Agent-05 [faq.md]           ████████████████████████ 100% ✅
+
+[Waiting...]
 
 Agent-02 completed ✅
 Agent-01 completed ✅
@@ -245,13 +278,13 @@ Agent-03 completed ✅
 ══════════════════════════════════════════════════════════════════
                     ✅ All translations complete
 ══════════════════════════════════════════════════════════════════
-Duration: 45s (Serial estimate: 180s)
-Speedup: 4x
+Total duration: 45 seconds (Serial estimate: 180 seconds)
+Parallel efficiency: 4x speedup
 ```
 
 ---
 
-## Example 3: API Endpoint Testing
+## Example 3: API Endpoint Testing Task
 
 ### User Request
 > "Test all API endpoints for response time and correctness"
@@ -278,20 +311,20 @@ Speedup: 4x
 
 ## Test Cases
 1. Normal request - Expect 200 OK
-2. Invalid params - Expect 400
-3. Unauthorized - Expect 401
+2. Invalid parameters - Expect 400 Bad Request
+3. Unauthorized - Expect 401 Unauthorized
 
-## Validation
+## Validation Points
 - Response time < 500ms
-- Returns JSON
-- Contains pagination
+- Returns JSON format
+- Contains pagination info
 
 ## Output Format
 ```json
 {
   "endpoint": "/api/users",
   "tests": [
-    {"case": "Normal", "status": "pass", "responseTime": 123}
+    {"case": "Normal request", "status": "pass", "responseTime": 123}
   ],
   "summary": {"total": 3, "pass": 3, "fail": 0}
 }
@@ -310,19 +343,19 @@ Speedup: 4x
 | Test cases | 15 |
 | Passed | 14 |
 | Failed | 1 |
-| Avg response | 156ms |
+| Average response time | 156ms |
 
 ## Failed Cases
 
-### ❌ POST /api/users - Large payload
+### ❌ POST /api/users - Large data volume test
 - Status: Timeout
-- Response: 5023ms (Limit: 1000ms)
-- Recommendation: Optimize DB writes
+- Response time: 5023ms (Threshold: 1000ms)
+- Recommendation: Optimize database write performance
 
-## Performance Ranking
+## Endpoint Performance Ranking
 
-| Rank | Endpoint | Avg Time |
-|------|----------|----------|
+| Rank | Endpoint | Avg Response Time |
+|------|----------|-------------------|
 | 1 | GET /api/products | 89ms |
 | 2 | GET /api/users | 123ms |
 | 3 | GET /api/users/:id | 145ms |
@@ -332,31 +365,34 @@ Speedup: 4x
 
 ---
 
-## Example 4: Real CLI Execution Script
+## Example 4: Real Execution Using Claude CLI
+
+### Complete PowerShell Script
 
 ```powershell
-# orchestrate.ps1 - Complete orchestration example
+# orchestrate.ps1 - Distributed Task Orchestration Example
 
 param(
-    [string]$Request = "Analyze code structure"
+    [string]$Request = "Analyze current directory code structure"
 )
 
 Write-Host "═══════════════════════════════════════════════════" -ForegroundColor Cyan
-Write-Host "       🤖 Distributed Task Orchestration" -ForegroundColor Cyan
+Write-Host "       🤖 Distributed Task Orchestration System" -ForegroundColor Cyan
 Write-Host "═══════════════════════════════════════════════════" -ForegroundColor Cyan
+Write-Host ""
 
-# Phase 1: Decompose
-Write-Host "`n📋 Phase 1: Decomposing..." -ForegroundColor Yellow
+# Phase 1: Task Decomposition
+Write-Host "📋 Phase 1: Analyzing request and decomposing tasks..." -ForegroundColor Yellow
 
 $decomposePrompt = @"
-Decompose into 3-5 independent atomic tasks.
+You are a task decomposition expert. Please decompose the following request into 3-5 independent atomic tasks.
 
 Request: $Request
 
-Output JSON:
+Output format (JSON):
 {
   "tasks": [
-    {"id": "T-01", "name": "Name", "description": "Desc", "deps": []}
+    {"id": "T-01", "name": "Task name", "description": "Detailed description", "deps": []}
   ]
 }
 "@
@@ -364,10 +400,11 @@ Output JSON:
 $taskJson = claude -p $decomposePrompt 2>$null
 $tasks = $taskJson | ConvertFrom-Json
 
-Write-Host "  ✅ Found $($tasks.tasks.Count) tasks" -ForegroundColor Green
+Write-Host "  ✅ Decomposition complete: $($tasks.tasks.Count) tasks" -ForegroundColor Green
 
-# Phase 2: Create files
-Write-Host "`n🤖 Phase 2: Assigning agents..." -ForegroundColor Yellow
+# Phase 2: Create Agent task files
+Write-Host ""
+Write-Host "🤖 Phase 2: Assigning agents..." -ForegroundColor Yellow
 
 $orchestratorDir = ".orchestrator"
 New-Item -ItemType Directory -Path "$orchestratorDir/agent_tasks" -Force | Out-Null
@@ -381,20 +418,21 @@ foreach ($task in $tasks.tasks) {
 # $agentId Task
 
 ## Task ID: $($task.id)
-## Name: $($task.name)
+## Task Name: $($task.name)
 
 $($task.description)
 
-Complete and output result.
+Please complete this task and output the result.
 "@
     
     $taskContent | Out-File "$orchestratorDir/agent_tasks/$agentId.md" -Encoding UTF8
-    Write-Host "  📝 $agentId -> $($task.name)" -ForegroundColor Gray
+    Write-Host "  📝 Created $agentId -> $($task.name)" -ForegroundColor Gray
     $agentIndex++
 }
 
-# Phase 3: Execute
-Write-Host "`n🚀 Phase 3: Executing..." -ForegroundColor Yellow
+# Phase 3: Parallel Execution
+Write-Host ""
+Write-Host "🚀 Phase 3: Parallel execution..." -ForegroundColor Yellow
 
 $taskFiles = Get-ChildItem "$orchestratorDir/agent_tasks/*.md"
 $startTime = Get-Date
@@ -406,10 +444,13 @@ $jobs = foreach ($file in $taskFiles) {
     Start-Job -Name $agentId -ScriptBlock {
         param($taskPath, $resultPath)
         $task = Get-Content $taskPath -Raw
-        claude -p $task 2>&1 | Out-File $resultPath -Encoding UTF8
+        $result = claude -p $task 2>&1
+        $result | Out-File $resultPath -Encoding UTF8
+        return $result
     } -ArgumentList $file.FullName, "$orchestratorDir/results/$agentId-result.md"
 }
 
+# Wait for completion
 $jobs | Wait-Job | Out-Null
 $endTime = Get-Date
 $duration = ($endTime - $startTime).TotalSeconds
@@ -417,43 +458,49 @@ $duration = ($endTime - $startTime).TotalSeconds
 Write-Host ""
 foreach ($job in $jobs) {
     $status = if ($job.State -eq 'Completed') { "✅" } else { "❌" }
-    Write-Host "  $status $($job.Name)" -ForegroundColor Green
+    Write-Host "  $status $($job.Name) completed" -ForegroundColor Green
 }
 
-# Phase 4: Aggregate
-Write-Host "`n📊 Phase 4: Aggregating..." -ForegroundColor Yellow
+# Phase 4: Result Aggregation
+Write-Host ""
+Write-Host "📊 Phase 4: Aggregating results..." -ForegroundColor Yellow
 
 $allResults = Get-ChildItem "$orchestratorDir/results/*.md" | ForEach-Object {
     "## $($_.BaseName)`n`n$(Get-Content $_ -Raw)"
 } | Out-String
 
 $mergePrompt = @"
-Integrate subtask results into concise report:
+Please integrate the following multiple subtask execution results into a concise report:
 
 $allResults
 
-Generate executive summary and key findings.
+Requirements: Generate executive summary and key findings
 "@
 
-claude -p $mergePrompt 2>$null | Out-File "$orchestratorDir/final_output.md" -Encoding UTF8
+$finalReport = claude -p $mergePrompt 2>$null
+$finalReport | Out-File "$orchestratorDir/final_output.md" -Encoding UTF8
 
-Write-Host "  ✅ Report complete" -ForegroundColor Green
+Write-Host "  ✅ Report generation complete" -ForegroundColor Green
 
+# Cleanup
 $jobs | Remove-Job
 
-Write-Host "`n═══════════════════════════════════════════════════" -ForegroundColor Green
-Write-Host "                  ✅ Complete" -ForegroundColor Green
+# Output summary
+Write-Host ""
 Write-Host "═══════════════════════════════════════════════════" -ForegroundColor Green
-Write-Host "`n📁 Results: $orchestratorDir" -ForegroundColor Yellow
-Write-Host "📄 Report: $orchestratorDir/final_output.md" -ForegroundColor Yellow
-Write-Host "⏱️ Duration: $([math]::Round($duration, 2))s" -ForegroundColor Yellow
+Write-Host "                   ✅ Execution Complete" -ForegroundColor Green
+Write-Host "═══════════════════════════════════════════════════" -ForegroundColor Green
+Write-Host ""
+Write-Host "📁 Results directory: $orchestratorDir" -ForegroundColor Yellow
+Write-Host "📄 Final report: $orchestratorDir/final_output.md" -ForegroundColor Yellow
+Write-Host "⏱️ Total duration: $([math]::Round($duration, 2)) seconds" -ForegroundColor Yellow
 ```
 
 ---
 
-## Example 5: Error Recovery
+## Example 5: Error Recovery Pattern
 
-### Scenario: Agent-03 Failed
+### Scenario: Agent-03 Execution Failed
 
 ```
 ══════════════════════════════════════════════════════════════════
@@ -470,7 +517,7 @@ Agent-04 ✅ Completed (2.3s)
 ══════════════════════════════════════════════════════════════════
 
 Agent-03 failure detected
-→ Update error log
+→ Update master_plan.md error log
 → Retry #1/3...
 → Agent-03 re-executing
 → ✅ Retry successful (3.5s)
@@ -480,36 +527,36 @@ Agent-03 failure detected
 ══════════════════════════════════════════════════════════════════
 ```
 
-### Error Log
+### Error Log Update
 
 ```markdown
 ## ⚠️ Error Log
 
 | Time | Agent | Error | Retries | Result |
 |------|-------|-------|---------|--------|
-| 14:30:22 | Agent-03 | Timeout (>60s) | 1 | ✅ Success |
+| 14:30:22 | Agent-03 | Execution timeout (>60s) | 1 | ✅ Success |
 ```
 
 ---
 
 ## Tips Summary
 
-### 1. Task Granularity
-- ✅ Good: "Analyze code quality in src/components"
+### 1. Task Granularity Control
+- ✅ Good: "Analyze code quality in src/components directory"
 - ❌ Bad: "Analyze entire codebase" (too large)
 - ❌ Bad: "Check one variable" (too small)
 
 ### 2. Minimize Dependencies
-- Design independent tasks when possible
-- Use files for intermediate results
+- Design independent tasks whenever possible
+- Use files to pass intermediate results
 - Avoid circular dependencies
 
 ### 3. Parallel Efficiency
-- More independent tasks = greater speedup
-- Control concurrency (4-8 recommended)
+- More independent tasks = greater parallel benefits
+- Control concurrency (recommend 4-8)
 - Monitor resource usage
 
 ### 4. Error Handling
 - Log all failures
-- Implement auto-retry
+- Implement automatic retry
 - Preserve partial results
