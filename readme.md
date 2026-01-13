@@ -505,7 +505,7 @@ function Invoke-AgentWithRetry {
 
 - [workflow.md](distributed-task-orchestrator/workflow.md) - Detailed workflow documentation
 - [templates.md](distributed-task-orchestrator/templates.md) - Complete template collection
-- [cli-integration.md](distributed-task-orchestrator/cli-integration.md) - Claude CLI deep integration
+- [cli-integration.md](distributed-task-orchestrator/distributed-task-orchestrator/cli-integration.md) - Claude CLI deep integration
 - [examples.md](distributed-task-orchestrator/examples.md) - Practical examples
 - [notes.md](distributed-task-orchestrator/notes.md) - Design notes
 
