@@ -73,15 +73,36 @@ The skill activates when users mention:
 
 ## Quick Start
 
-### 1. Initialize the Orchestration Directory
+### Option A: Using the Initialization Script (Recommended)
+
+The `init-orchestrator.ps1` script automatically sets up the entire task structure:
+
+```powershell
+# Basic usage
+.\init-orchestrator.ps1 -Slug "code-review" -Description "Analyze TypeScript code quality"
+
+# With custom agents
+.\init-orchestrator.ps1 -Slug "api-test" -Agents "SecurityExpert","PerformanceAnalyst"
+
+# With custom task names
+.\init-orchestrator.ps1 -Slug "refactor" -TaskNames "Analyze","Design","Implement","Test"
+
+# Specify task count
+.\init-orchestrator.ps1 -Slug "docs" -TaskCount 5
+```
+
+This creates:
+- `.orchestrator/tasks/001-code-review/` - Task directory with serial number
+- `.orchestrator/latest/` - Symlink pointing to the latest task
+- All required subdirectories and templates
+
+### Option B: Manual Setup
 
 ```bash
 mkdir .orchestrator
 mkdir .orchestrator/agent_tasks
 mkdir .orchestrator/results
 ```
-
-### 2. Create the Master Plan
 
 Create `.orchestrator/master_plan.md` with your task decomposition:
 
@@ -108,7 +129,7 @@ The orchestrator will:
 1. Execute T-01 first (no dependencies)
 2. Run T-02, T-03, T-04 in parallel (all depend only on T-01)
 3. Execute T-05 after all parallel tasks complete
-4. Generate final output in `.orchestrator/final_output.md`
+4. Generate final output in `.orchestrator/latest/final_output.md`
 
 ---
 
@@ -171,6 +192,74 @@ claude -p $task | Out-File ".orchestrator/results/agent-01-result.md"
 
 ---
 
+## Task Initialization
+
+The `init-orchestrator.ps1` script automates task setup with built-in safety features.
+
+### Features
+
+- **Serial Numbering**: Automatic task ID generation (001, 002, 003...)
+- **Concurrency Safety**: Mutex-based locking prevents race conditions
+- **Atomic Operations**: Safe file writes even on concurrent access
+- **Conflict Resolution**: Automatic suffix handling for duplicate slugs
+- **Dynamic Configuration**: Customize agents, tasks, and count
+
+### Parameters
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `-Slug` | string | URL-friendly identifier for the task | Required |
+| `-Description` | string | Human-readable task description | "" |
+| `-Request` | string | Original user request | "" |
+| `-Agents` | string[] | Custom agent names | @("Agent-01", "Agent-02", "Agent-03") |
+| `-TaskNames` | string[] | Custom task names | @("Analyze", "Implement", "Verify") |
+| `-TaskCount` | int | Number of tasks to generate | 3 |
+| `-Force` | switch | Overwrite existing task directory | false |
+
+### Examples
+
+```powershell
+# Basic code review task
+.\init-orchestrator.ps1 -Slug "code-review" -Description "Review code quality"
+
+# API testing with custom agents
+.\init-orchestrator.ps1 -Slug "api-test" -Request "Test all endpoints" -Agents "SecurityExpert","PerformanceAnalyst"
+
+# Documentation with 5 parallel tasks
+.\init-orchestrator.ps1 -Slug "docs" -TaskCount 5
+
+# Full feature development
+.\init-orchestrator.ps1 -Slug "auth-system" -Description "Implement JWT auth" `
+    -TaskNames "Design","Model","API","Middleware","Frontend","Tests" `
+    -Agents "BackendDev","FrontendDev","SecurityExpert","QATester"
+```
+
+### Concurrency Safety
+
+The script includes built-in protection against concurrent initialization:
+
+- **Mutex Lock**: 30-second timeout prevents simultaneous task creation
+- **Atomic Writes**: Files written via temp + rename pattern
+- **Safe Junction Handling**: Proper cleanup of symlinks before recreation
+
+This means you can safely run multiple instances of the script without corrupting the task registry.
+
+### Task Switching
+
+Switch the `latest` symlink to work on a different task:
+
+```powershell
+# Switch to task 002
+$task = Get-Item '.orchestrator/tasks/002-security-scan'
+Remove-Item '.orchestrator/latest' -Recurse -Force
+New-Item -ItemType Junction -Path '.orchestrator/latest' -Target $task.FullName -Force
+
+# Quick command (one-liner)
+$i=Get-Item '.orchestrator/latest' -Force; if(($i.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { cmd /c 'rmdir "".orchestrator\latest""' } else { cmd /c 'rmdir /S /Q "".orchestrator\latest""' }; New-Item -ItemType Junction -Path '.orchestrator/latest' -Target '.orchestrator/tasks/002-security-scan' -Force
+```
+
+---
+
 ## File Structure
 
 ### Skill Files (Reference)
@@ -183,7 +272,8 @@ distributed-task-orchestrator/
 ├── cli-integration.md    # Claude CLI integration guide
 ├── examples.md           # Practical examples
 ├── notes.md              # Design notes
-└── task_plan.md          # Development task plan
+├── init.md               # Task initialization guide
+└── init-orchestrator.ps1 # Task initialization script
 ```
 
 ### Runtime Files (Generated in User's Project)
@@ -191,17 +281,35 @@ distributed-task-orchestrator/
 ```
 [user-project]/
 ├── .orchestrator/
-│   ├── master_plan.md          # Master task plan and status
-│   ├── agent_tasks/
-│   │   ├── agent-01.md         # Agent-01 task description
-│   │   ├── agent-02.md         # Agent-02 task description
-│   │   └── ...
-│   ├── results/
-│   │   ├── agent-01-result.md  # Agent-01 execution result
-│   │   ├── agent-02-result.md  # Agent-02 execution result
-│   │   └── ...
-│   └── final_output.md         # Aggregated final output
+│   ├── tasks/
+│   │   ├── 001-code-review/          # First task (serial number + slug)
+│   │   │   ├── meta.json             # Task metadata
+│   │   │   ├── master_plan.md        # Master task plan and status
+│   │   │   ├── agent_tasks/
+│   │   │   │   ├── Agent-01-T-01.md  # Agent-01 task description
+│   │   │   │   ├── Agent-02-T-02.md  # Agent-02 task description
+│   │   │   │   └── ...
+│   │   │   ├── results/
+│   │   │   │   ├── agent-01-result.md # Agent-01 execution result
+│   │   │   │   ├── agent-02-result.md # Agent-02 execution result
+│   │   │   │   └── ...
+│   │   │   └── final_output.md       # Aggregated final output
+│   │   ├── 002-security-scan/        # Second task
+│   │   └── 003-api-test/             # Third task
+│   ├── latest/                       # Symlink to most recent task
+│   └── active_tasks.json             # Registry of all active tasks
 ```
+
+### Task ID Format
+
+Tasks use serial numbering for better readability and sorting:
+
+- **Format**: `{NNN}-{slug}`
+- **Example**: `001-code-review`, `002-security-scan`, `003-api-test`
+- **Benefits**:
+  - Natural chronological ordering
+  - Easy to reference (e.g., "task 1", "task 42")
+  - Conflicts auto-resolved with suffixes (`-2`, `-3`)
 
 ---
 
@@ -458,13 +566,31 @@ function Invoke-AgentWithRetry {
 
 ## Best Practices
 
-### 1. Task Granularity
+### 1. Use the Initialization Script
+
+Always prefer `init-orchestrator.ps1` over manual setup:
+
+- **Automatic setup**: Creates all directories and files
+- **Concurrency safe**: Mutex locking prevents race conditions
+- **Consistent structure**: Every task follows the same format
+- **Less error-prone**: No manual file creation
+
+```powershell
+# Good
+.\init-orchestrator.ps1 -Slug "code-review" -Description "Review code quality"
+
+# Avoid - manual setup is tedious and error-prone
+mkdir .orchestrator/tasks/task-20241214-103000
+# ... many more manual steps
+```
+
+### 2. Task Granularity
 
 - **Ideal**: Each task completes in 1-5 minutes
 - **Too large**: Break down further
 - **Too small**: Consider merging
 
-### 2. Minimize Dependencies
+### 3. Minimize Dependencies
 
 - Design independent tasks whenever possible
 - Use files to pass intermediate results
@@ -488,7 +614,14 @@ function Invoke-AgentWithRetry {
 - Implement automatic retry with exponential backoff
 - Preserve partial results for recovery
 
-### 6. Dependency Types
+### 6. Concurrency Safety
+
+- Use mutex locks when multiple processes may write shared files
+- Write files atomically (temp file + rename pattern)
+- The `init-orchestrator.ps1` script includes these protections
+- Be careful with manual concurrent access to `active_tasks.json`
+
+### 7. Dependency Types
 
 
 | Type            | Description            | Example           |
