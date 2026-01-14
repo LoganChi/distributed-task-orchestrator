@@ -115,6 +115,28 @@ function Write-TextFileAtomic {
     Move-Item -LiteralPath $tmp -Destination $Path -Force
 }
 
+function Read-TextFileSmart {
+    param([string]$Path)
+
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+        return [System.Text.Encoding]::UTF8.GetString($bytes, 3, $bytes.Length - 3)
+    }
+    if ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) {
+        return [System.Text.Encoding]::Unicode.GetString($bytes, 2, $bytes.Length - 2)
+    }
+    if ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFE -and $bytes[1] -eq 0xFF) {
+        return [System.Text.Encoding]::BigEndianUnicode.GetString($bytes, 2, $bytes.Length - 2)
+    }
+
+    $utf8Strict = New-Object System.Text.UTF8Encoding $false, $true
+    try {
+        return $utf8Strict.GetString($bytes)
+    } catch {
+        return [System.Text.Encoding]::Default.GetString($bytes)
+    }
+}
+
 function Remove-LatestLinkSafe {
     param([string]$LatestLink)
 
@@ -533,7 +555,7 @@ function Invoke-OneTask {
         [string]$AgentName
     )
 
-    $task = Get-Content -LiteralPath $TaskPath -Raw -Encoding UTF8
+    $task = Read-TextFileSmart -Path $TaskPath
     $startTime = Get-Date
 
     try {
@@ -609,7 +631,29 @@ if ($Parallel) {
                 Move-Item -LiteralPath $tmp -Destination $Path -Force
             }
 
-            $task = Get-Content -LiteralPath $taskPath -Raw -Encoding UTF8
+            function Read-TextFileSmart {
+                param([string]$Path)
+
+                $bytes = [System.IO.File]::ReadAllBytes($Path)
+                if ($bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF) {
+                    return [System.Text.Encoding]::UTF8.GetString($bytes, 3, $bytes.Length - 3)
+                }
+                if ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFF -and $bytes[1] -eq 0xFE) {
+                    return [System.Text.Encoding]::Unicode.GetString($bytes, 2, $bytes.Length - 2)
+                }
+                if ($bytes.Length -ge 2 -and $bytes[0] -eq 0xFE -and $bytes[1] -eq 0xFF) {
+                    return [System.Text.Encoding]::BigEndianUnicode.GetString($bytes, 2, $bytes.Length - 2)
+                }
+
+                $utf8Strict = New-Object System.Text.UTF8Encoding $false, $true
+                try {
+                    return $utf8Strict.GetString($bytes)
+                } catch {
+                    return [System.Text.Encoding]::Default.GetString($bytes)
+                }
+            }
+
+            $task = Read-TextFileSmart -Path $taskPath
             $startTime = Get-Date
             try {
                 $output = claude -p $task 2>&1
