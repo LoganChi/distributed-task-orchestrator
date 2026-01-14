@@ -5,25 +5,61 @@ param(
     [string]$Slug = "",              # Optional semantic identifier (e.g., "code-review", "security-scan")
     [string]$Description = "",       # Task description
     [string]$Request = "",           # User's original request
+    [string[]]$Agents = @(),
+    [string[]]$TaskNames = @(),
+    [int]$TaskCount = 3,
     [switch]$Force = $false          # Force overwrite if task ID exists
 )
 
 # Function to generate unique task ID
-function New-TaskId {
-    param([string]$Slug = "")
+function Get-NextTaskNumber {
+    param([string]$TasksDir)
 
-    $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
-    $taskId = "task-$timestamp"
+    if ([string]::IsNullOrEmpty($TasksDir) -or -not (Test-Path $TasksDir)) {
+        return 1
+    }
 
-    if ($Slug) {
-        # Clean slug: only keep alphanumeric and hyphens
-        $cleanSlug = $Slug -replace '[^a-zA-Z0-9-]', ''
-        if ($cleanSlug) {
-            $taskId = "$taskId-$cleanSlug"
+    $max = 0
+    Get-ChildItem -Path $TasksDir -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        if ($_.Name -match '^(?<n>\d{3})-') {
+            $n = [int]$matches['n']
+            if ($n -gt $max) { $max = $n }
         }
     }
 
-    return $taskId
+    return ($max + 1)
+}
+
+function New-TaskId {
+    param(
+        [string]$Slug = "",
+        [string]$Description = "",
+        [string]$TasksDir = "",
+        [switch]$Force
+    )
+
+    $nameSource = if ($Slug) { $Slug } elseif ($Description) { $Description } else { "task" }
+    $clean = (($nameSource -replace '[^\p{L}\p{N}-]+', '-') -replace '(^-+|-+$)', '')
+    if ([string]::IsNullOrEmpty($clean)) {
+        $clean = "task"
+    }
+
+    $seq = if ($Force -or [string]::IsNullOrEmpty($TasksDir)) { 1 } else { Get-NextTaskNumber -TasksDir $TasksDir }
+    $seqText = "{0:D3}" -f $seq
+    $baseId = "$seqText-$clean"
+
+    if ($Force -or [string]::IsNullOrEmpty($TasksDir)) {
+        return $baseId
+    }
+
+    $candidateId = $baseId
+    $i = 2
+    while (Test-Path (Join-Path $TasksDir $candidateId)) {
+        $candidateId = "$baseId-$i"
+        $i++
+    }
+
+    return $candidateId
 }
 
 # Function to validate slug
@@ -44,12 +80,16 @@ if (-not (Test-Slug -Slug $Slug)) {
     exit 1
 }
 
-# Generate task ID
-$taskId = New-TaskId -Slug $Slug
-
 # Orchestrator root directory
 $orchestratorRoot = ".orchestrator"
 $tasksDir = "$orchestratorRoot/tasks"
+
+if (-not (Test-Path $tasksDir)) {
+    New-Item -ItemType Directory -Path $tasksDir -Force | Out-Null
+}
+
+# Generate task ID
+$taskId = New-TaskId -Slug $Slug -Description $Description -TasksDir $tasksDir -Force:$Force
 $taskDir = "$tasksDir/$taskId"
 
 # Check if task already exists
@@ -69,7 +109,6 @@ if (Test-Path $taskDir) {
 Write-Host "Creating task directory structure..." -ForegroundColor Cyan
 
 $directories = @(
-    $tasksDir,
     $taskDir,
     "$taskDir/agent_tasks",
     "$taskDir/results"
@@ -121,25 +160,56 @@ $activeTasks += @{
 $activeTasks | ConvertTo-Json -Depth 10 | Out-File $activeTasksFile -Encoding UTF8
 Write-Host "  Updated: $activeTasksFile" -ForegroundColor Gray
 
-# Update latest symlink
-$latestLink = "$orchestratorRoot/latest"
-if (Test-Path $latestLink) {
-    Remove-Item $latestLink -Recurse -Force
-}
-Copy-Item -Path $taskDir -Destination $latestLink -Recurse -Force
-Write-Host "  Updated: $latestLink" -ForegroundColor Gray
-
 # Create master plan file
+$latestLink = "$orchestratorRoot/latest"
 $requestText = if ($Request) { $Request } else { "[Fill in user request here]" }
 $descText = if ($Description) { $Description } else { "[Task description]" }
+$agentNames = if ($Agents -and $Agents.Count -gt 0) {
+    $Agents
+} else {
+    1..3 | ForEach-Object { "Agent-{0:D2}" -f $_ }
+}
+
+$defaultTaskNames = @("Analyze","Implement","Verify")
+$effectiveTaskNames = if ($TaskNames -and $TaskNames.Count -gt 0) { $TaskNames } else { @() }
+$taskTotal = [Math]::Max(1, [Math]::Max($TaskCount, [Math]::Max($effectiveTaskNames.Count, 3)))
+$getTaskName = {
+    param([int]$index)
+    if ($effectiveTaskNames -and $effectiveTaskNames.Count -gt $index -and -not [string]::IsNullOrEmpty($effectiveTaskNames[$index])) {
+        return $effectiveTaskNames[$index]
+    }
+    if ($defaultTaskNames.Count -gt $index) {
+        return $defaultTaskNames[$index]
+    }
+    return ("Task-{0:D2}" -f ($index + 1))
+}
+
+$taskListRowList = @()
+for ($i = 0; $i -lt $taskTotal; $i++) {
+    $taskIdText = "T-{0:D2}" -f ($i + 1)
+    $taskName = & $getTaskName $i
+    $deps = if ($i -eq 0) { "None" } else { "T-{0:D2}" -f $i }
+    $priority = if ($i -eq 0) { "P0" } else { "P1" }
+    $taskListRowList += "| $taskIdText | $taskName | | $deps | $priority | |"
+}
+$taskListRows = $taskListRowList -join "`n"
+
+$agentAssignmentRowList = @()
+for ($i = 0; $i -lt $taskTotal; $i++) {
+    $taskIdText = "T-{0:D2}" -f ($i + 1)
+    $agentName = $agentNames[$i % $agentNames.Count]
+    $taskName = & $getTaskName $i
+    $agentAssignmentRowList += "| $taskIdText | $agentName - $taskName | Pending | - | - | 0 |"
+}
+$agentAssignmentRows = $agentAssignmentRowList -join "`n"
 
 $masterPlan = @"
-# 🎯 Distributed Task Plan
+# Distributed Task Plan
 
 ## Task Meta
 - **Task ID**: $taskId
 - **Created**: $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
-- **Status**: 🟡 Initialized
+- **Status**: Initialized
 - **Working Directory**: $taskDir
 
 ---
@@ -155,7 +225,7 @@ $masterPlan = @"
 
 ---
 
-## 📋 Task Decomposition
+## Task Decomposition
 
 ### Dependency Graph
 ```
@@ -166,45 +236,41 @@ $masterPlan = @"
 
 | Task ID | Task Name | Description | Dependencies | Priority | Est. Time |
 |---------|-----------|-------------|--------------|----------|-----------|
-| T-01 | | | None | P0 | |
-| T-02 | | | T-01 | P1 | |
-| T-03 | | | None | P1 | |
+$taskListRows
 
 ---
 
-## 🤖 Agent Assignment
+## Agent Assignment
 
 | Task ID | Agent | Status | Start Time | End Time | Retries |
 |---------|-------|--------|------------|----------|---------|
-| T-01 | Agent-01 | 🟡 Pending | - | - | 0 |
-| T-02 | Agent-02 | 🟡 Pending | - | - | 0 |
-| T-03 | Agent-03 | 🟡 Pending | - | - | 0 |
+$agentAssignmentRows
 
 ### Status Legend
-- 🟡 Pending - Awaiting execution
-- 🔵 Running - Currently executing
-- ✅ Completed - Execution successful
-- ❌ Failed - Execution failed
-- ⏸️ Waiting - Dependencies not satisfied
-- 🔄 Retrying - Retrying after failure
+- Pending - Awaiting execution
+- Running - Currently executing
+- Completed - Execution successful
+- Failed - Execution failed
+- Waiting - Dependencies not satisfied
+- Retrying - Retrying after failure
 
 ---
 
-## 📊 Execution Progress
+## Execution Progress
 
 ### Current Batch: #0
 **Status**: Initializing
 
 ### Completion Statistics
-- Total tasks: 3
+- Total tasks: $taskTotal
 - Completed: 0
 - In progress: 0
-- Waiting: 3
+- Waiting: $taskTotal
 - Failed: 0
 
 ---
 
-## 📝 Execution Log
+## Execution Log
 
 ### [$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] Initialization
 - Task plan created
@@ -213,7 +279,7 @@ $masterPlan = @"
 
 ---
 
-## ⚠️ Error Log
+## Error Log
 
 | Time | Agent | Task ID | Error Type | Description | Resolution |
 |------|-------|---------|------------|-------------|------------|
@@ -221,14 +287,34 @@ $masterPlan = @"
 
 ---
 
-## 📦 Final Output
+## Final Output
 
 **Output Location**: `$latestLink/final_output.md`
 **Status**: Pending generation
 "@
 
-$masterPlan | Out-File "$latestLink/master_plan.md" -Encoding UTF8
-Write-Host "  Created: $latestLink/master_plan.md" -ForegroundColor Gray
+$masterPlan | Out-File "$taskDir/master_plan.md" -Encoding UTF8
+Write-Host "  Created: $taskDir/master_plan.md" -ForegroundColor Gray
+
+# Update latest pointer (junction preferred; fallback to copy)
+if (Test-Path $latestLink) {
+    Remove-Item $latestLink -Recurse -Force
+}
+
+$latestUpdated = $false
+try {
+    $resolvedTaskDir = (Resolve-Path $taskDir).Path
+    New-Item -ItemType Junction -Path $latestLink -Target $resolvedTaskDir -Force | Out-Null
+    $latestUpdated = $true
+} catch {
+    $latestUpdated = $false
+}
+
+if (-not $latestUpdated) {
+    Copy-Item -Path $taskDir -Destination $latestLink -Recurse -Force
+}
+
+Write-Host "  Updated: $latestLink" -ForegroundColor Gray
 
 # Output summary
 Write-Host ""
@@ -245,18 +331,22 @@ Write-Host "  1. Edit task plan:" -ForegroundColor White
 Write-Host "     $latestLink/master_plan.md" -ForegroundColor Gray
 Write-Host ""
 Write-Host "  2. Create agent task files:" -ForegroundColor White
-Write-Host "     $latestLink/agent_tasks/agent-01.md" -ForegroundColor Gray
+$firstAgent = if ($agentNames -and $agentNames.Count -gt 0) { $agentNames[0] } else { "Agent-01" }
+$firstTaskIdText = "T-{0:D2}" -f 1
+$firstTaskName = & $getTaskName 0
+$agentFileName = ("$firstAgent-$firstTaskIdText-$firstTaskName" -replace '[\\/:*?\"<>|]+', '-') + ".md"
+Write-Host "     $latestLink/agent_tasks/$agentFileName" -ForegroundColor Gray
 Write-Host ""
 Write-Host "  3. Run execution script:" -ForegroundColor White
 Write-Host "     .\run-agents.ps1 -Parallel" -ForegroundColor Gray
 Write-Host ""
 Write-Host "Task management commands:" -ForegroundColor Cyan
 Write-Host "  List all tasks:" -ForegroundColor White
-Write-Host "     Get-ChildItem '.orchestrator/tasks/task-*' | Sort-Object LastWriteTime -Descending" -ForegroundColor Gray
+Write-Host "     Get-ChildItem '.orchestrator/tasks/[0-9][0-9][0-9]-*' | Sort-Object LastWriteTime -Descending" -ForegroundColor Gray
 Write-Host ""
 Write-Host "  Switch to a specific task:" -ForegroundColor White
-Write-Host "     Copy-Item -Path '.orchestrator/tasks/<task-id>' -Destination '.orchestrator/latest' -Recurse -Force" -ForegroundColor Gray
+Write-Host "     Remove-Item '.orchestrator/latest' -Recurse -Force; New-Item -ItemType Junction -Path '.orchestrator/latest' -Target '.orchestrator/tasks/<task-id>' -Force" -ForegroundColor Gray
 Write-Host ""
 Write-Host "  Clean up old tasks (keep last 5):" -ForegroundColor White
-Write-Host "     Get-ChildItem '.orchestrator/tasks/task-*' | Sort-Object LastWriteTime -Descending | Select-Object -Skip 5 | Remove-Item -Recurse -Force" -ForegroundColor Gray
+Write-Host "     Get-ChildItem '.orchestrator/tasks/[0-9][0-9][0-9]-*' | Sort-Object LastWriteTime -Descending | Select-Object -Skip 5 | Remove-Item -Recurse -Force" -ForegroundColor Gray
 Write-Host ""
