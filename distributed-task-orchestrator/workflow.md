@@ -168,14 +168,25 @@ $activeTasks | ConvertTo-Json -Depth 10 | Out-File $activeTasksFile -Encoding UT
 ### 0.5 Create/Update Latest Symlink
 
 ```powershell
-# Update .orchestrator/latest to point to new task
-$latestLink = ".orchestrator/latest"
-if (Test-Path $latestLink) {
-    Remove-Item $latestLink -Recurse -Force
-}
-Copy-Item -Path $taskDir -Destination $latestLink -Recurse -Force
+# Ensure orchestrator root exists
+$orchestratorRoot = ".orchestrator"
+New-Item -ItemType Directory -Path $orchestratorRoot -Force | Out-Null
 
-# Now .orchestrator/latest -> .orchestrator/tasks/task-20250114-143022-code-review/
+# Update .orchestrator/latest to point to new task (prefer a junction)
+$latestLink = Join-Path $orchestratorRoot "latest"
+if (Test-Path -LiteralPath $latestLink) {
+    $item = Get-Item -LiteralPath $latestLink -Force -ErrorAction SilentlyContinue
+    if ($item -and (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)) {
+        cmd /c "rmdir `"$latestLink`"" | Out-Null
+    } else {
+        Remove-Item -LiteralPath $latestLink -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+$resolvedTaskDir = (Resolve-Path $taskDir).Path
+New-Item -ItemType Junction -Path $latestLink -Target $resolvedTaskDir -Force | Out-Null
+
+# Now .orchestrator/latest -> .orchestrator/tasks/task-.../
 ```
 
 ---

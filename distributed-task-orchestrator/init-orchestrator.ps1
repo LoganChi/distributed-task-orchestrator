@@ -158,6 +158,27 @@ function Convert-ToSafeAsciiFileBaseName {
     return $t.ToLowerInvariant()
 }
 
+function Get-ResolvedTaskDirFromLatest {
+    param([string]$TaskDir)
+
+    if ([string]::IsNullOrEmpty($TaskDir)) {
+        return $TaskDir
+    }
+
+    try {
+        $item = Get-Item -LiteralPath $TaskDir -Force -ErrorAction Stop
+        if ((($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) -and $item.Target) {
+            if ($item.Target -is [System.Array]) {
+                return $item.Target[0]
+            }
+            return $item.Target
+        }
+    } catch {
+    }
+
+    return $TaskDir
+}
+
 # Validate slug
 if (-not (Test-Slug -Slug $Slug)) {
     Write-Error "Invalid slug: '$Slug'. Slug can only contain letters, numbers, and hyphens."
@@ -172,6 +193,40 @@ if (-not (Test-Path $tasksDir)) {
     New-Item -ItemType Directory -Path $tasksDir -Force | Out-Null
 }
 
+function Repair-OrchestratorState {
+    param(
+        [string]$OrchestratorRoot,
+        [string]$TasksDir
+    )
+
+    if (-not (Test-Path $OrchestratorRoot)) {
+        New-Item -ItemType Directory -Path $OrchestratorRoot -Force | Out-Null
+    }
+    if (-not (Test-Path $TasksDir)) {
+        New-Item -ItemType Directory -Path $TasksDir -Force | Out-Null
+    }
+
+    $activeTasksFile = Join-Path $OrchestratorRoot "active_tasks.json"
+    if (Test-Path $activeTasksFile) {
+        $activeTasks = @()
+        try {
+            $activeTasks = Get-Content $activeTasksFile -Raw | ConvertFrom-Json
+        } catch {
+            $activeTasks = @()
+        }
+        if ($null -eq $activeTasks) {
+            $activeTasks = @()
+        } elseif ($activeTasks -isnot [System.Array]) {
+            $activeTasks = @($activeTasks)
+        }
+
+        $filtered = @($activeTasks | Where-Object { $_.taskDir -and (Test-Path -LiteralPath $_.taskDir) })
+        if ($filtered.Count -ne $activeTasks.Count) {
+            Write-TextFileAtomic -Path $activeTasksFile -Content ($filtered | ConvertTo-Json -Depth 10)
+        }
+    }
+}
+
 # Generate task ID + initialize directories + update registries (single-writer)
 $mutexName = Get-OrchestratorMutexName -TasksDir $tasksDir
 $mutex = [System.Threading.Mutex]::new($false, $mutexName)
@@ -183,6 +238,8 @@ try {
         Write-Error "Initialization lock timeout. Another initialization may be running."
         exit 1
     }
+
+    Repair-OrchestratorState -OrchestratorRoot $orchestratorRoot -TasksDir $tasksDir
 
     $taskId = New-TaskId -Slug $Slug -Description $Description -TasksDir $tasksDir -Force:$Force
     $taskDir = "$tasksDir/$taskId"
@@ -391,6 +448,240 @@ $agentAssignmentRows
     Write-TextFileAtomic -Path "$taskDir/master_plan.md" -Content $masterPlan
     Write-Host "  Created: $taskDir/master_plan.md" -ForegroundColor Gray
 
+$runAgentsScript = @'
+param(
+    [switch]$Parallel = $false,
+    [int]$MaxJobs = 4,
+    [string]$TaskDir = ""
+)
+
+$utf8NoBom = New-Object System.Text.UTF8Encoding $false
+[Console]::OutputEncoding = $utf8NoBom
+$OutputEncoding = $utf8NoBom
+try { chcp 65001 | Out-Null } catch {}
+
+function Resolve-TaskDir {
+    param([string]$TaskDir)
+
+    if ([string]::IsNullOrEmpty($TaskDir)) {
+        if (-not (Test-Path ".orchestrator/latest")) {
+            Write-Error "No active task found in .orchestrator/latest"
+            exit 1
+        }
+        $TaskDir = ".orchestrator/latest"
+    }
+
+    try {
+        $item = Get-Item -LiteralPath $TaskDir -Force -ErrorAction Stop
+        if ((($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) -and $item.Target) {
+            if ($item.Target -is [System.Array]) { return $item.Target[0] }
+            return $item.Target
+        }
+    } catch {
+    }
+
+    return $TaskDir
+}
+
+function Write-TextFileAtomic {
+    param(
+        [string]$Path,
+        [string]$Content
+    )
+
+    $parent = Split-Path -Parent $Path
+    if (-not [string]::IsNullOrEmpty($parent) -and -not (Test-Path $parent)) {
+        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    }
+
+    $tmp = "$Path.$PID.$([Guid]::NewGuid().ToString('N')).tmp"
+    $Content | Out-File -LiteralPath $tmp -Encoding UTF8
+    Move-Item -LiteralPath $tmp -Destination $Path -Force
+}
+
+$resolvedTaskDir = Resolve-TaskDir -TaskDir $TaskDir
+$agentTasksDir = Join-Path $resolvedTaskDir "agent_tasks"
+$resultDir = Join-Path $resolvedTaskDir "results"
+
+if (-not (Test-Path $resultDir)) {
+    New-Item -ItemType Directory -Path $resultDir -Force | Out-Null
+}
+
+$taskFiles = @()
+if (Test-Path $agentTasksDir) {
+    $taskFiles = Get-ChildItem "$agentTasksDir/*.md" -ErrorAction SilentlyContinue | Sort-Object Name
+}
+
+Write-Host "===================================================" -ForegroundColor Cyan
+Write-Host "       Distributed Task Orchestration - Agent Executor" -ForegroundColor Cyan
+Write-Host "===================================================" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "Task Directory: $resolvedTaskDir" -ForegroundColor Gray
+Write-Host "Found $($taskFiles.Count) tasks" -ForegroundColor Yellow
+Write-Host "Parallel mode: $Parallel (Max concurrency: $MaxJobs)" -ForegroundColor Yellow
+Write-Host ""
+
+if ($taskFiles.Count -eq 0) {
+    Write-Host "No agent task files found." -ForegroundColor Yellow
+    exit 0
+}
+
+function Invoke-OneTask {
+    param(
+        [string]$TaskPath,
+        [string]$ResultPath,
+        [string]$AgentName
+    )
+
+    $task = Get-Content -LiteralPath $TaskPath -Raw -Encoding UTF8
+    $startTime = Get-Date
+
+    try {
+        $output = claude -p $task 2>&1
+        $endTime = Get-Date
+        $duration = ($endTime - $startTime).TotalSeconds
+
+        $content = @"
+# Agent Execution Result
+
+## Execution Info
+- Agent: $AgentName
+- Status: Success
+- Start: $startTime
+- End: $endTime
+- Duration: $duration seconds
+
+## Output
+
+$output
+"@
+
+        Write-TextFileAtomic -Path $ResultPath -Content $content
+        return @{ Agent = $AgentName; Status = "Success"; Duration = $duration }
+    } catch {
+        $endTime = Get-Date
+        $content = @"
+# Agent Execution Result
+
+## Execution Info
+- Agent: $AgentName
+- Status: Failed
+- Start: $startTime
+- End: $endTime
+- Error: $($_.Exception.Message)
+"@
+        Write-TextFileAtomic -Path $ResultPath -Content $content
+        return @{ Agent = $AgentName; Status = "Failed"; Error = $_.Exception.Message }
+    }
+}
+
+if ($Parallel) {
+    $running = New-Object System.Collections.ArrayList
+    foreach ($file in $taskFiles) {
+        while ($running.Count -ge $MaxJobs) {
+            $done = Wait-Job -Job $running -Any
+            $res = Receive-Job $done
+            if ($res.Status -eq "Success") {
+                Write-Host "OK $($res.Agent): Success ($([math]::Round($res.Duration, 2))s)" -ForegroundColor Green
+            } else {
+                Write-Host "FAIL $($res.Agent): Failed - $($res.Error)" -ForegroundColor Red
+            }
+            [void]$running.Remove($done)
+            Remove-Job $done
+        }
+
+        $agentId = $file.BaseName
+        $resultPath = Join-Path $resultDir "$agentId-result.md"
+        $job = Start-Job -Name $agentId -ArgumentList @($file.FullName, $resultPath, $agentId) -ScriptBlock {
+            param($taskPath, $resultPath, $agentName)
+            $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+            [Console]::OutputEncoding = $utf8NoBom
+            $OutputEncoding = $utf8NoBom
+            try { chcp 65001 | Out-Null } catch {}
+            function Write-TextFileAtomic {
+                param([string]$Path,[string]$Content)
+                $parent = Split-Path -Parent $Path
+                if (-not [string]::IsNullOrEmpty($parent) -and -not (Test-Path $parent)) {
+                    New-Item -ItemType Directory -Path $parent -Force | Out-Null
+                }
+                $tmp = "$Path.$PID.$([Guid]::NewGuid().ToString('N')).tmp"
+                $Content | Out-File -LiteralPath $tmp -Encoding UTF8
+                Move-Item -LiteralPath $tmp -Destination $Path -Force
+            }
+
+            $task = Get-Content -LiteralPath $taskPath -Raw -Encoding UTF8
+            $startTime = Get-Date
+            try {
+                $output = claude -p $task 2>&1
+                $endTime = Get-Date
+                $duration = ($endTime - $startTime).TotalSeconds
+                $content = @"
+# Agent Execution Result
+
+## Execution Info
+- Agent: $agentName
+- Status: Success
+- Start: $startTime
+- End: $endTime
+- Duration: $duration seconds
+
+## Output
+
+$output
+"@
+                Write-TextFileAtomic -Path $resultPath -Content $content
+                return @{ Agent = $agentName; Status = "Success"; Duration = $duration }
+            } catch {
+                $endTime = Get-Date
+                $content = @"
+# Agent Execution Result
+
+## Execution Info
+- Agent: $agentName
+- Status: Failed
+- Start: $startTime
+- End: $endTime
+- Error: $($_.Exception.Message)
+"@
+                Write-TextFileAtomic -Path $resultPath -Content $content
+                return @{ Agent = $agentName; Status = "Failed"; Error = $_.Exception.Message }
+            }
+        }
+        [void]$running.Add($job)
+    }
+
+    while ($running.Count -gt 0) {
+        $done = Wait-Job -Job $running -Any
+        $res = Receive-Job $done
+        if ($res.Status -eq "Success") {
+            Write-Host "OK $($res.Agent): Success ($([math]::Round($res.Duration, 2))s)" -ForegroundColor Green
+        } else {
+            Write-Host "FAIL $($res.Agent): Failed - $($res.Error)" -ForegroundColor Red
+        }
+        [void]$running.Remove($done)
+        Remove-Job $done
+    }
+} else {
+    foreach ($file in $taskFiles) {
+        $agentId = $file.BaseName
+        $resultPath = Join-Path $resultDir "$agentId-result.md"
+        Write-Host "▶ Executing $agentId..." -ForegroundColor Cyan
+        $res = Invoke-OneTask -TaskPath $file.FullName -ResultPath $resultPath -AgentName $agentId
+        if ($res.Status -eq "Success") {
+            Write-Host "  OK Completed ($([math]::Round($res.Duration, 2))s)" -ForegroundColor Green
+        } else {
+            Write-Host "  FAIL Failed - $($res.Error)" -ForegroundColor Red
+        }
+    }
+}
+
+Write-Host ""
+Write-Host "Results saved to: $resultDir" -ForegroundColor Yellow
+'@
+
+    Write-TextFileAtomic -Path "$taskDir/run-agents.ps1" -Content $runAgentsScript
+    Write-Host "  Created: $taskDir/run-agents.ps1" -ForegroundColor Gray
+
     Remove-LatestLinkSafe -LatestLink $latestLink
 
     $latestUpdated = $false
@@ -453,15 +744,16 @@ Write-Host "     $taskDir/agent_tasks/$agentFileName" -ForegroundColor Gray
 Write-Host "     $latestLink/agent_tasks/$agentFileName" -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "  3. Run execution script:" -ForegroundColor White
-Write-Host "     .\run-agents.ps1 -Parallel" -ForegroundColor Gray
+Write-Host "     powershell -NoProfile -ExecutionPolicy Bypass -File $taskDir/run-agents.ps1 -Parallel" -ForegroundColor Gray
+Write-Host "     powershell -NoProfile -ExecutionPolicy Bypass -File $latestLink/run-agents.ps1 -Parallel" -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "Task management commands:" -ForegroundColor Cyan
 Write-Host "  List all tasks:" -ForegroundColor White
-Write-Host "     Get-ChildItem '.orchestrator/tasks/[0-9][0-9][0-9]-*' | Sort-Object LastWriteTime -Descending" -ForegroundColor Gray
+Write-Host "     Get-ChildItem '.orchestrator/tasks' -Directory | Sort-Object LastWriteTime -Descending" -ForegroundColor Gray
 Write-Host ""
 Write-Host "  Switch to a specific task:" -ForegroundColor White
 Write-Host "     `$i=Get-Item '.orchestrator/latest' -Force; if ((`$i.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { cmd /c 'rmdir "".orchestrator\\latest""' } else { cmd /c 'rmdir /S /Q "".orchestrator\\latest""' }; New-Item -ItemType Junction -Path '.orchestrator/latest' -Target '.orchestrator/tasks/<task-id>' -Force" -ForegroundColor Gray
 Write-Host ""
 Write-Host "  Clean up old tasks (keep last 5):" -ForegroundColor White
-Write-Host "     Get-ChildItem '.orchestrator/tasks/[0-9][0-9][0-9]-*' | Sort-Object LastWriteTime -Descending | Select-Object -Skip 5 | Remove-Item -Recurse -Force" -ForegroundColor Gray
+Write-Host "     Get-ChildItem '.orchestrator/tasks' -Directory | Sort-Object LastWriteTime -Descending | Select-Object -Skip 5 | Remove-Item -Recurse -Force" -ForegroundColor Gray
 Write-Host ""
