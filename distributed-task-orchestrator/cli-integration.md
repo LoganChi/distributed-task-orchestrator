@@ -365,10 +365,11 @@ function Invoke-AgentStreaming {
     param([string]$TaskFile)
     
     $task = Get-Content $TaskFile -Raw
-    $process = Start-Process claude -ArgumentList "-p `"$task`"" -NoNewWindow -PassThru -RedirectStandardOutput "temp_output.txt"
+    $tempOutput = Join-Path $env:TEMP ("claude-output-{0}.txt" -f ([Guid]::NewGuid().ToString("N")))
+    $process = Start-Process claude -ArgumentList "-p `"$task`"" -NoNewWindow -PassThru -RedirectStandardOutput $tempOutput
     
     # Read output in real-time
-    $reader = New-Object System.IO.StreamReader("temp_output.txt")
+    $reader = New-Object System.IO.StreamReader($tempOutput)
     while (-not $process.HasExited) {
         while (-not $reader.EndOfStream) {
             $line = $reader.ReadLine()
@@ -383,7 +384,7 @@ function Invoke-AgentStreaming {
     }
     
     $reader.Close()
-    Remove-Item "temp_output.txt"
+    Remove-Item $tempOutput
 }
 ```
 
