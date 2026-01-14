@@ -39,7 +39,10 @@ function New-TaskId {
     )
 
     $nameSource = if ($Slug) { $Slug } elseif ($Description) { $Description } else { "task" }
-    $clean = (($nameSource -replace '[^\p{L}\p{N}-]+', '-') -replace '(^-+|-+$)', '')
+    $clean = (($nameSource -replace '[^a-zA-Z0-9-]+', '-') -replace '(^-+|-+$)', '')
+    if (-not [string]::IsNullOrEmpty($clean)) {
+        $clean = $clean.ToLowerInvariant()
+    }
     if ([string]::IsNullOrEmpty($clean)) {
         $clean = "task"
     }
@@ -138,6 +141,21 @@ function Remove-LatestLinkSafe {
 
     $escaped = $LatestLink.Replace('"', '""')
     cmd /c "rmdir /S /Q `"$escaped`"" | Out-Null
+}
+
+function Convert-ToSafeAsciiFileBaseName {
+    param([string]$Text)
+
+    if ([string]::IsNullOrEmpty($Text)) {
+        return ""
+    }
+
+    $t = ($Text -replace '[^a-zA-Z0-9-]+', '-')
+    $t = ($t -replace '(^-+|-+$)', '')
+    if ([string]::IsNullOrEmpty($t)) {
+        return ""
+    }
+    return $t.ToLowerInvariant()
 }
 
 # Validate slug
@@ -426,7 +444,11 @@ Write-Host "  2. Create agent task files:" -ForegroundColor White
 $firstAgent = if ($agentNames -and $agentNames.Count -gt 0) { $agentNames[0] } else { "Agent-01" }
 $firstTaskIdText = "T-{0:D2}" -f 1
 $firstTaskName = & $getTaskName 0
-$agentFileName = ("$firstAgent-$firstTaskIdText-$firstTaskName" -replace '[\\/:*?\"<>|]+', '-') + ".md"
+$safeTaskName = Convert-ToSafeAsciiFileBaseName -Text $firstTaskName
+if ([string]::IsNullOrEmpty($safeTaskName)) {
+    $safeTaskName = "task-01"
+}
+$agentFileName = ("$firstAgent-$firstTaskIdText-$safeTaskName" -replace '[\\/:*?\"<>|]+', '-') + ".md"
 Write-Host "     $taskDir/agent_tasks/$agentFileName" -ForegroundColor Gray
 Write-Host "     $latestLink/agent_tasks/$agentFileName" -ForegroundColor DarkGray
 Write-Host ""
