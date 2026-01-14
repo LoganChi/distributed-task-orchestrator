@@ -409,7 +409,7 @@ if ($Parallel) {
                 $endTime = Get-Date
                 $duration = ($endTime - $startTime).TotalSeconds
 
-                # Write result
+                $tmp = "$resultPath.$PID.$([Guid]::NewGuid().ToString('N')).tmp"
                 @"
 # Agent Execution Result
 
@@ -423,7 +423,8 @@ if ($Parallel) {
 ## Output
 
 $result
-"@ | Out-File $resultPath -Encoding UTF8
+"@ | Out-File $tmp -Encoding UTF8
+                Move-Item -LiteralPath $tmp -Destination $resultPath -Force
 
                 return @{
                     Agent = $agentName
@@ -433,6 +434,7 @@ $result
             }
             catch {
                 $endTime = Get-Date
+                $tmp = "$resultPath.$PID.$([Guid]::NewGuid().ToString('N')).tmp"
                 @"
 # Agent Execution Result
 
@@ -442,7 +444,8 @@ $result
 - Start: $startTime
 - End: $endTime
 - Error: $($_.Exception.Message)
-"@ | Out-File $resultPath -Encoding UTF8
+"@ | Out-File $tmp -Encoding UTF8
+                Move-Item -LiteralPath $tmp -Destination $resultPath -Force
 
                 return @{
                     Agent = $agentName
