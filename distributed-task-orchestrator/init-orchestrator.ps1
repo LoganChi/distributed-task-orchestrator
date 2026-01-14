@@ -316,15 +316,15 @@ try {
     $latestLink = "$orchestratorRoot/latest"
     $requestText = if ($Request) { $Request } else { "[Fill in user request here]" }
     $descText = if ($Description) { $Description } else { "[Task description]" }
-    $agentNames = if ($Agents -and $Agents.Count -gt 0) {
-        $Agents
-    } else {
-        1..3 | ForEach-Object { "Agent-{0:D2}" -f $_ }
-    }
 
     $defaultTaskNames = @("Analyze","Implement","Verify")
     $effectiveTaskNames = if ($TaskNames -and $TaskNames.Count -gt 0) { $TaskNames } else { @() }
     $taskTotal = [Math]::Max(1, [Math]::Max($TaskCount, [Math]::Max($effectiveTaskNames.Count, 3)))
+    $agentNames = if ($Agents -and $Agents.Count -gt 0) {
+        $Agents
+    } else {
+        1..$taskTotal | ForEach-Object { "Agent-{0:D2}" -f $_ }
+    }
     $getTaskName = {
         param([int]$index)
         if ($effectiveTaskNames -and $effectiveTaskNames.Count -gt $index -and -not [string]::IsNullOrEmpty($effectiveTaskNames[$index])) {
