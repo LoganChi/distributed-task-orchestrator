@@ -74,6 +74,72 @@ function Test-Slug {
     return $Slug -match '^[a-zA-Z0-9-]+$'
 }
 
+function Get-OrchestratorMutexName {
+    param([string]$TasksDir)
+
+    $resolved = $TasksDir
+    try {
+        $resolved = (Resolve-Path $TasksDir -ErrorAction Stop).Path
+    } catch {
+        $resolved = $TasksDir
+    }
+
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($resolved)
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $hashBytes = $sha.ComputeHash($bytes)
+    } finally {
+        $sha.Dispose()
+    }
+
+    $hex = -join ($hashBytes | ForEach-Object { $_.ToString("x2") })
+    return "Local\distributed-task-orchestrator-$hex"
+}
+
+function Write-TextFileAtomic {
+    param(
+        [string]$Path,
+        [string]$Content
+    )
+
+    $parent = Split-Path -Parent $Path
+    if (-not [string]::IsNullOrEmpty($parent) -and -not (Test-Path $parent)) {
+        New-Item -ItemType Directory -Path $parent -Force | Out-Null
+    }
+
+    $tmp = "$Path.$PID.$([Guid]::NewGuid().ToString('N')).tmp"
+    $Content | Out-File -LiteralPath $tmp -Encoding UTF8
+    Move-Item -LiteralPath $tmp -Destination $Path -Force
+}
+
+function Remove-LatestLinkSafe {
+    param([string]$LatestLink)
+
+    if (-not (Test-Path -LiteralPath $LatestLink)) {
+        return
+    }
+
+    $item = Get-Item -LiteralPath $LatestLink -Force -ErrorAction SilentlyContinue
+    if ($null -eq $item) {
+        return
+    }
+
+    if (-not $item.PSIsContainer) {
+        Remove-Item -LiteralPath $LatestLink -Force -ErrorAction SilentlyContinue
+        return
+    }
+
+    $isReparse = (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
+    if ($isReparse) {
+        $escaped = $LatestLink.Replace('"', '""')
+        cmd /c "rmdir `"$escaped`"" | Out-Null
+        return
+    }
+
+    $escaped = $LatestLink.Replace('"', '""')
+    cmd /c "rmdir /S /Q `"$escaped`"" | Out-Null
+}
+
 # Validate slug
 if (-not (Test-Slug -Slug $Slug)) {
     Write-Error "Invalid slug: '$Slug'. Slug can only contain letters, numbers, and hyphens."
@@ -88,122 +154,133 @@ if (-not (Test-Path $tasksDir)) {
     New-Item -ItemType Directory -Path $tasksDir -Force | Out-Null
 }
 
-# Generate task ID
-$taskId = New-TaskId -Slug $Slug -Description $Description -TasksDir $tasksDir -Force:$Force
-$taskDir = "$tasksDir/$taskId"
+# Generate task ID + initialize directories + update registries (single-writer)
+$mutexName = Get-OrchestratorMutexName -TasksDir $tasksDir
+$mutex = [System.Threading.Mutex]::new($false, $mutexName)
+$lockAcquired = $false
 
-# Check if task already exists
-if (Test-Path $taskDir) {
-    if (-not $Force) {
-        Write-Warning "Task directory already exists: $taskDir"
-        $choice = Read-Host "Do you want to overwrite? (Y/N)"
-        if ($choice -ne "Y") {
-            Write-Host "Initialization cancelled." -ForegroundColor Yellow
-            exit 0
+try {
+    $lockAcquired = $mutex.WaitOne([TimeSpan]::FromSeconds(30))
+    if (-not $lockAcquired) {
+        Write-Error "Initialization lock timeout. Another initialization may be running."
+        exit 1
+    }
+
+    $taskId = New-TaskId -Slug $Slug -Description $Description -TasksDir $tasksDir -Force:$Force
+    $taskDir = "$tasksDir/$taskId"
+
+    if (Test-Path $taskDir) {
+        if (-not $Force) {
+            Write-Warning "Task directory already exists: $taskDir"
+            $choice = Read-Host "Do you want to overwrite? (Y/N)"
+            if ($choice -ne "Y") {
+                Write-Host "Initialization cancelled." -ForegroundColor Yellow
+                exit 0
+            }
+        }
+        Remove-Item $taskDir -Recurse -Force
+    }
+
+    Write-Host "Creating task directory structure..." -ForegroundColor Cyan
+
+    $directories = @(
+        $taskDir,
+        "$taskDir/agent_tasks",
+        "$taskDir/results"
+    )
+
+    foreach ($dir in $directories) {
+        if (-not (Test-Path $dir)) {
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            Write-Host "  Created: $dir" -ForegroundColor Gray
         }
     }
-    Remove-Item $taskDir -Recurse -Force
-}
 
-# Create directory structure
-Write-Host "Creating task directory structure..." -ForegroundColor Cyan
+    $meta = @{
+        taskId = $taskId
+        slug = $Slug
+        description = $Description
+        request = $Request
+        createdAt = (Get-Date -Format "o")
+        status = "initialized"
+        workingDirectory = $taskDir
+    } | ConvertTo-Json -Depth 10
 
-$directories = @(
-    $taskDir,
-    "$taskDir/agent_tasks",
-    "$taskDir/results"
-)
+    Write-TextFileAtomic -Path "$taskDir/meta.json" -Content $meta
+    Write-Host "  Created: $taskDir/meta.json" -ForegroundColor Gray
 
-foreach ($dir in $directories) {
-    if (-not (Test-Path $dir)) {
-        New-Item -ItemType Directory -Path $dir -Force | Out-Null
-        Write-Host "  Created: $dir" -ForegroundColor Gray
-    }
-}
-
-# Create task metadata
-$meta = @{
-    taskId = $taskId
-    slug = $Slug
-    description = $Description
-    request = $Request
-    createdAt = (Get-Date -Format "o")
-    status = "initialized"
-    workingDirectory = $taskDir
-} | ConvertTo-Json -Depth 10
-
-$meta | Out-File "$taskDir/meta.json" -Encoding UTF8
-Write-Host "  Created: $taskDir/meta.json" -ForegroundColor Gray
-
-# Update active tasks registry
-$activeTasksFile = "$orchestratorRoot/active_tasks.json"
-$activeTasks = if (Test-Path $activeTasksFile) {
-    try {
-        Get-Content $activeTasksFile | ConvertFrom-Json
-    } catch {
+    $activeTasksFile = "$orchestratorRoot/active_tasks.json"
+    $activeTasks = if (Test-Path $activeTasksFile) {
+        try {
+            Get-Content $activeTasksFile -Raw | ConvertFrom-Json
+        } catch {
+            @()
+        }
+    } else {
         @()
     }
-} else {
-    @()
-}
 
-# Add new task to registry
-$activeTasks += @{
-    taskId = $taskId
-    slug = $Slug
-    description = $Description
-    request = $Request
-    createdAt = (Get-Date -Format "o")
-    taskDir = $taskDir
-}
-
-$activeTasks | ConvertTo-Json -Depth 10 | Out-File $activeTasksFile -Encoding UTF8
-Write-Host "  Updated: $activeTasksFile" -ForegroundColor Gray
-
-# Create master plan file
-$latestLink = "$orchestratorRoot/latest"
-$requestText = if ($Request) { $Request } else { "[Fill in user request here]" }
-$descText = if ($Description) { $Description } else { "[Task description]" }
-$agentNames = if ($Agents -and $Agents.Count -gt 0) {
-    $Agents
-} else {
-    1..3 | ForEach-Object { "Agent-{0:D2}" -f $_ }
-}
-
-$defaultTaskNames = @("Analyze","Implement","Verify")
-$effectiveTaskNames = if ($TaskNames -and $TaskNames.Count -gt 0) { $TaskNames } else { @() }
-$taskTotal = [Math]::Max(1, [Math]::Max($TaskCount, [Math]::Max($effectiveTaskNames.Count, 3)))
-$getTaskName = {
-    param([int]$index)
-    if ($effectiveTaskNames -and $effectiveTaskNames.Count -gt $index -and -not [string]::IsNullOrEmpty($effectiveTaskNames[$index])) {
-        return $effectiveTaskNames[$index]
+    if ($null -eq $activeTasks) {
+        $activeTasks = @()
+    } elseif ($activeTasks -isnot [System.Array]) {
+        $activeTasks = @($activeTasks)
     }
-    if ($defaultTaskNames.Count -gt $index) {
-        return $defaultTaskNames[$index]
+
+    $activeTasks += @{
+        taskId = $taskId
+        slug = $Slug
+        description = $Description
+        request = $Request
+        createdAt = (Get-Date -Format "o")
+        taskDir = $taskDir
     }
-    return ("Task-{0:D2}" -f ($index + 1))
-}
 
-$taskListRowList = @()
-for ($i = 0; $i -lt $taskTotal; $i++) {
-    $taskIdText = "T-{0:D2}" -f ($i + 1)
-    $taskName = & $getTaskName $i
-    $deps = if ($i -eq 0) { "None" } else { "T-{0:D2}" -f $i }
-    $priority = if ($i -eq 0) { "P0" } else { "P1" }
-    $taskListRowList += "| $taskIdText | $taskName | | $deps | $priority | |"
-}
-$taskListRows = $taskListRowList -join "`n"
+    Write-TextFileAtomic -Path $activeTasksFile -Content ($activeTasks | ConvertTo-Json -Depth 10)
+    Write-Host "  Updated: $activeTasksFile" -ForegroundColor Gray
 
-$agentAssignmentRowList = @()
-for ($i = 0; $i -lt $taskTotal; $i++) {
-    $taskIdText = "T-{0:D2}" -f ($i + 1)
-    $agentName = $agentNames[$i % $agentNames.Count]
-    $taskName = & $getTaskName $i
-    $agentAssignmentRowList += "| $taskIdText | $agentName - $taskName | Pending | - | - | 0 |"
-}
-$agentAssignmentRows = $agentAssignmentRowList -join "`n"
+    $latestLink = "$orchestratorRoot/latest"
+    $requestText = if ($Request) { $Request } else { "[Fill in user request here]" }
+    $descText = if ($Description) { $Description } else { "[Task description]" }
+    $agentNames = if ($Agents -and $Agents.Count -gt 0) {
+        $Agents
+    } else {
+        1..3 | ForEach-Object { "Agent-{0:D2}" -f $_ }
+    }
 
-$masterPlan = @"
+    $defaultTaskNames = @("Analyze","Implement","Verify")
+    $effectiveTaskNames = if ($TaskNames -and $TaskNames.Count -gt 0) { $TaskNames } else { @() }
+    $taskTotal = [Math]::Max(1, [Math]::Max($TaskCount, [Math]::Max($effectiveTaskNames.Count, 3)))
+    $getTaskName = {
+        param([int]$index)
+        if ($effectiveTaskNames -and $effectiveTaskNames.Count -gt $index -and -not [string]::IsNullOrEmpty($effectiveTaskNames[$index])) {
+            return $effectiveTaskNames[$index]
+        }
+        if ($defaultTaskNames.Count -gt $index) {
+            return $defaultTaskNames[$index]
+        }
+        return ("Task-{0:D2}" -f ($index + 1))
+    }
+
+    $taskListRowList = @()
+    for ($i = 0; $i -lt $taskTotal; $i++) {
+        $taskIdText = "T-{0:D2}" -f ($i + 1)
+        $taskName = & $getTaskName $i
+        $deps = if ($i -eq 0) { "None" } else { "T-{0:D2}" -f $i }
+        $priority = if ($i -eq 0) { "P0" } else { "P1" }
+        $taskListRowList += "| $taskIdText | $taskName | | $deps | $priority | |"
+    }
+    $taskListRows = $taskListRowList -join "`n"
+
+    $agentAssignmentRowList = @()
+    for ($i = 0; $i -lt $taskTotal; $i++) {
+        $taskIdText = "T-{0:D2}" -f ($i + 1)
+        $agentName = $agentNames[$i % $agentNames.Count]
+        $taskName = & $getTaskName $i
+        $agentAssignmentRowList += "| $taskIdText | $agentName - $taskName | Pending | - | - | 0 |"
+    }
+    $agentAssignmentRows = $agentAssignmentRowList -join "`n"
+
+    $masterPlan = @"
 # Distributed Task Plan
 
 ## Task Meta
@@ -289,32 +366,46 @@ $agentAssignmentRows
 
 ## Final Output
 
-**Output Location**: `$latestLink/final_output.md`
+**Output Location**: `$taskDir/final_output.md`
 **Status**: Pending generation
 "@
 
-$masterPlan | Out-File "$taskDir/master_plan.md" -Encoding UTF8
-Write-Host "  Created: $taskDir/master_plan.md" -ForegroundColor Gray
+    Write-TextFileAtomic -Path "$taskDir/master_plan.md" -Content $masterPlan
+    Write-Host "  Created: $taskDir/master_plan.md" -ForegroundColor Gray
 
-# Update latest pointer (junction preferred; fallback to copy)
-if (Test-Path $latestLink) {
-    Remove-Item $latestLink -Recurse -Force
-}
+    Remove-LatestLinkSafe -LatestLink $latestLink
 
-$latestUpdated = $false
-try {
-    $resolvedTaskDir = (Resolve-Path $taskDir).Path
-    New-Item -ItemType Junction -Path $latestLink -Target $resolvedTaskDir -Force | Out-Null
-    $latestUpdated = $true
-} catch {
     $latestUpdated = $false
-}
+    $resolvedTaskDir = (Resolve-Path $taskDir).Path
+    try {
+        New-Item -ItemType Junction -Path $latestLink -Target $resolvedTaskDir -Force | Out-Null
+        $latestUpdated = $true
+    } catch {
+        $latestUpdated = $false
+    }
 
-if (-not $latestUpdated) {
-    Copy-Item -Path $taskDir -Destination $latestLink -Recurse -Force
-}
+    if (-not $latestUpdated) {
+        try {
+            $escapedLink = $latestLink.Replace('"', '""')
+            $escapedTarget = $resolvedTaskDir.Replace('"', '""')
+            cmd /c "mklink /J `"$escapedLink`" `"$escapedTarget`"" | Out-Null
+            $latestUpdated = $true
+        } catch {
+            $latestUpdated = $false
+        }
+    }
 
-Write-Host "  Updated: $latestLink" -ForegroundColor Gray
+    if (-not $latestUpdated) {
+        Copy-Item -Path $taskDir -Destination $latestLink -Recurse -Force
+    }
+
+    Write-Host "  Updated: $latestLink" -ForegroundColor Gray
+} finally {
+    if ($lockAcquired) {
+        $mutex.ReleaseMutex()
+    }
+    $mutex.Dispose()
+}
 
 # Output summary
 Write-Host ""
@@ -328,14 +419,16 @@ Write-Host "Quick Access:  $latestLink" -ForegroundColor Yellow
 Write-Host ""
 Write-Host "Next steps:" -ForegroundColor Cyan
 Write-Host "  1. Edit task plan:" -ForegroundColor White
-Write-Host "     $latestLink/master_plan.md" -ForegroundColor Gray
+Write-Host "     $taskDir/master_plan.md" -ForegroundColor Gray
+Write-Host "     $latestLink/master_plan.md" -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "  2. Create agent task files:" -ForegroundColor White
 $firstAgent = if ($agentNames -and $agentNames.Count -gt 0) { $agentNames[0] } else { "Agent-01" }
 $firstTaskIdText = "T-{0:D2}" -f 1
 $firstTaskName = & $getTaskName 0
 $agentFileName = ("$firstAgent-$firstTaskIdText-$firstTaskName" -replace '[\\/:*?\"<>|]+', '-') + ".md"
-Write-Host "     $latestLink/agent_tasks/$agentFileName" -ForegroundColor Gray
+Write-Host "     $taskDir/agent_tasks/$agentFileName" -ForegroundColor Gray
+Write-Host "     $latestLink/agent_tasks/$agentFileName" -ForegroundColor DarkGray
 Write-Host ""
 Write-Host "  3. Run execution script:" -ForegroundColor White
 Write-Host "     .\run-agents.ps1 -Parallel" -ForegroundColor Gray
@@ -345,7 +438,7 @@ Write-Host "  List all tasks:" -ForegroundColor White
 Write-Host "     Get-ChildItem '.orchestrator/tasks/[0-9][0-9][0-9]-*' | Sort-Object LastWriteTime -Descending" -ForegroundColor Gray
 Write-Host ""
 Write-Host "  Switch to a specific task:" -ForegroundColor White
-Write-Host "     Remove-Item '.orchestrator/latest' -Recurse -Force; New-Item -ItemType Junction -Path '.orchestrator/latest' -Target '.orchestrator/tasks/<task-id>' -Force" -ForegroundColor Gray
+Write-Host "     `$i=Get-Item '.orchestrator/latest' -Force; if ((`$i.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { cmd /c 'rmdir "".orchestrator\\latest""' } else { cmd /c 'rmdir /S /Q "".orchestrator\\latest""' }; New-Item -ItemType Junction -Path '.orchestrator/latest' -Target '.orchestrator/tasks/<task-id>' -Force" -ForegroundColor Gray
 Write-Host ""
 Write-Host "  Clean up old tasks (keep last 5):" -ForegroundColor White
 Write-Host "     Get-ChildItem '.orchestrator/tasks/[0-9][0-9][0-9]-*' | Sort-Object LastWriteTime -Descending | Select-Object -Skip 5 | Remove-Item -Recurse -Force" -ForegroundColor Gray
